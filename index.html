@@ -1,0 +1,636 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pile of Shame Tracker</title>
+<style>
+  :root {
+    --bg: #14161a;
+    --panel: #1c1f26;
+    --panel-2: #23272f;
+    --border: #333844;
+    --text: #e7e9ee;
+    --muted: #99a0ad;
+    --accent: #7c5cff;
+    --accent-2: #5b8cff;
+    --danger: #e5484d;
+    --ok: #46b880;
+    --radius: 10px;
+    --shadow: 0 8px 30px rgba(0,0,0,.45);
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    font: 14px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    color: var(--text);
+    background: var(--bg);
+  }
+  button {
+    font: inherit;
+    color: var(--text);
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 6px 12px;
+    cursor: pointer;
+  }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.primary:hover { filter: brightness(1.1); }
+  button.ghost { background: transparent; }
+  button.danger { color: var(--danger); border-color: transparent; background: transparent; }
+  button.danger:hover { border-color: var(--danger); }
+  button.small { padding: 3px 8px; font-size: 12px; }
+  input, select, textarea {
+    font: inherit;
+    color: var(--text);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 7px 9px;
+    width: 100%;
+  }
+  input[type=color] { padding: 2px; height: 34px; cursor: pointer; }
+  label { display: block; font-size: 12px; color: var(--muted); margin: 0 0 4px; }
+  .field { margin-bottom: 12px; }
+  a { color: var(--accent-2); }
+
+  /* Layout */
+  header {
+    display: flex; align-items: center; gap: 16px;
+    padding: 12px 20px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    position: sticky; top: 0; z-index: 5;
+    flex-wrap: wrap;
+  }
+  header h1 { font-size: 18px; margin: 0; display: flex; align-items: center; gap: 8px; }
+  .counter {
+    background: var(--panel-2); border: 1px solid var(--border);
+    padding: 6px 12px; border-radius: 999px; font-size: 13px;
+  }
+  .counter b { color: var(--accent); }
+  .spacer { flex: 1; }
+  .topbar-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+  .layout { display: flex; min-height: calc(100vh - 58px); }
+  aside {
+    width: 280px; flex-shrink: 0;
+    background: var(--panel);
+    border-right: 1px solid var(--border);
+    padding: 16px; overflow-y: auto;
+  }
+  main { flex: 1; padding: 24px; overflow-x: auto; }
+
+  .side-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+  .side-head h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 0; }
+
+  .army-item {
+    display: block; width: 100%; text-align: left;
+    background: transparent; border: 1px solid transparent;
+    border-radius: var(--radius); padding: 10px 12px; margin-bottom: 6px;
+  }
+  .army-item:hover { background: var(--panel-2); border-color: var(--border); }
+  .army-item.active { background: var(--panel-2); border-color: var(--accent); }
+  .army-item .name { font-weight: 600; }
+  .army-item .game { color: var(--muted); font-size: 12px; }
+  .army-item .prog { color: var(--muted); font-size: 12px; margin-top: 4px; }
+  .army-item .bar { height: 4px; border-radius: 4px; background: var(--border); margin-top: 6px; overflow: hidden; }
+  .army-item .bar > span { display: block; height: 100%; background: var(--ok); }
+
+  .side-tools { margin-top: 16px; border-top: 1px solid var(--border); padding-top: 16px; }
+  .side-tools button { width: 100%; margin-bottom: 8px; }
+
+  /* Main */
+  .main-head { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; flex-wrap: wrap; }
+  .main-head h2 { margin: 0; font-size: 22px; }
+  .main-head .meta { color: var(--muted); }
+  .empty { color: var(--muted); text-align: center; padding: 60px 20px; }
+
+  table { width: 100%; border-collapse: collapse; }
+  th { text-align: left; font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); padding: 8px 10px; border-bottom: 1px solid var(--border); }
+  td { padding: 10px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+  tr:hover td { background: var(--panel); }
+  .unit-name { font-weight: 600; }
+  .unit-notes { color: var(--muted); font-size: 12px; }
+  .row-actions { display: flex; gap: 4px; justify-content: flex-end; }
+  select.stage { width: auto; min-width: 130px; }
+
+  .badge { display: inline-block; padding: 3px 9px; border-radius: 999px; font-size: 12px; font-weight: 600; border: 1px solid transparent; }
+  .stage-badge { min-width: 92px; text-align: center; box-sizing: border-box; }
+
+  .scheme-cell { display: flex; align-items: center; gap: 6px; }
+  .swatches { display: inline-flex; }
+  .swatches span { width: 14px; height: 14px; border-radius: 3px; border: 1px solid rgba(255,255,255,.2); margin-left: -3px; }
+  .swatches span:first-child { margin-left: 0; }
+
+  /* Modal */
+  .overlay {
+    position: fixed; inset: 0; background: rgba(0,0,0,.6);
+    display: flex; align-items: flex-start; justify-content: center;
+    padding: 40px 16px; z-index: 20; overflow-y: auto;
+  }
+  .overlay[hidden] { display: none; }
+  .modal {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 14px; box-shadow: var(--shadow);
+    width: 100%; max-width: 620px; padding: 22px;
+  }
+  .modal h3 { margin: 0 0 16px; }
+  .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 18px; }
+  .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+
+  /* Paint editor */
+  .paint-row { display: grid; grid-template-columns: 46px 1fr 1fr 130px 32px; gap: 8px; align-items: center; margin-bottom: 8px; }
+  .paint-row .del { padding: 4px 8px; }
+  .paint-head { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+  .scheme-block { border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; margin-bottom: 14px; }
+  .scheme-block .sb-head { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; }
+  .scheme-block .sb-head input { flex: 1; }
+
+  @media (max-width: 720px) {
+    aside { width: 100%; border-right: none; border-bottom: 1px solid var(--border); }
+    .layout { flex-direction: column; }
+    .paint-row { grid-template-columns: 40px 1fr 90px 30px; }
+    .paint-row .role-cell { grid-column: 2 / span 2; }
+    .row2 { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>🎖️ Pile of Shame</h1>
+  <span class="counter" id="counter"></span>
+  <div class="spacer"></div>
+  <div class="topbar-actions">
+    <button id="btn-schemes">🎨 Paint Schemes</button>
+    <button id="btn-export">⬇ Export</button>
+    <button id="btn-import">⬆ Import</button>
+    <button id="btn-reset" class="danger">Reset</button>
+    <input type="file" id="import-file" accept="application/json,.json" hidden>
+  </div>
+</header>
+
+<div class="layout">
+  <aside>
+    <div class="side-head">
+      <h2>Armies</h2>
+      <button class="small primary" id="btn-add-army">+ Add</button>
+    </div>
+    <div id="army-list"></div>
+  </aside>
+
+  <main id="main"></main>
+</div>
+
+<!-- Generic modal host -->
+<div class="overlay" id="overlay" hidden>
+  <div class="modal" id="modal"></div>
+</div>
+
+<script>
+"use strict";
+
+// ---------- Constants ----------
+const STORAGE_KEY = "pileOfShame";
+const STAGES = [
+  { id: "unassembled", label: "Unassembled", color: "#8a8f9a" },
+  { id: "assembled",   label: "Assembled",   color: "#b07a3c" },
+  { id: "primed",      label: "Primed",      color: "#7e8ba3" },
+  { id: "painting",    label: "Painting",    color: "#5b8cff" },
+  { id: "based",       label: "Based",       color: "#9b6dff" },
+  { id: "finished",    label: "Finished",    color: "#46b880" },
+];
+const FINISHED = "finished";
+const ROLES = ["base", "layer", "wash", "shade", "drybrush", "highlight", "edge", "metallic", "contrast", "varnish", "other"];
+
+// ---------- State ----------
+let state = load() || seed();
+let selectedArmyId = state.armies[0]?.id || null;
+
+function seed() {
+  return { version: 1, schemes: [], armies: [] };
+}
+function load() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return null;
+    const data = JSON.parse(raw);
+    return normalize(data);
+  } catch (e) {
+    console.warn("Failed to load saved data:", e);
+    return null;
+  }
+}
+function save() {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  } catch (e) {
+    alert("Could not save data: " + e.message);
+  }
+}
+// Validate / coerce an imported or loaded object into a safe shape.
+function normalize(data) {
+  if (!data || typeof data !== "object") throw new Error("not an object");
+  const out = { version: 1, schemes: [], armies: [] };
+  if (Array.isArray(data.schemes)) {
+    out.schemes = data.schemes.map(s => ({
+      id: s.id || uid(),
+      name: String(s.name || "Untitled scheme"),
+      paints: Array.isArray(s.paints) ? s.paints.map(p => ({
+        id: p.id || uid(),
+        name: String(p.name || ""),
+        brand: String(p.brand || ""),
+        role: ROLES.includes(p.role) ? p.role : "base",
+        hex: /^#[0-9a-fA-F]{6}$/.test(p.hex) ? p.hex : "#888888",
+      })) : [],
+    }));
+  }
+  if (Array.isArray(data.armies)) {
+    const schemeIds = new Set(out.schemes.map(s => s.id));
+    out.armies = data.armies.map(a => ({
+      id: a.id || uid(),
+      name: String(a.name || "Unnamed army"),
+      game: String(a.game || ""),
+      notes: String(a.notes || ""),
+      schemeId: schemeIds.has(a.schemeId) ? a.schemeId : null,
+      units: Array.isArray(a.units) ? a.units.map(u => ({
+        id: u.id || uid(),
+        name: String(u.name || "Unnamed unit"),
+        modelCount: Number.isFinite(+u.modelCount) ? Math.max(0, Math.floor(+u.modelCount)) : 1,
+        stage: STAGES.some(s => s.id === u.stage) ? u.stage : "unassembled",
+        schemeId: schemeIds.has(u.schemeId) ? u.schemeId : null,
+        notes: String(u.notes || ""),
+      })) : [],
+    }));
+  }
+  return out;
+}
+
+// ---------- Helpers ----------
+const uid = () => (crypto.randomUUID ? crypto.randomUUID() : "id-" + Math.random().toString(36).slice(2) + Date.now());
+const $ = sel => document.querySelector(sel);
+const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+const findArmy = id => state.armies.find(a => a.id === id);
+const findScheme = id => state.schemes.find(s => s.id === id);
+const stageDef = id => STAGES.find(s => s.id === id) || STAGES[0];
+function effectiveScheme(army, unit) {
+  const id = unit.schemeId || army.schemeId;
+  return id ? findScheme(id) : null;
+}
+function armyProgress(army) {
+  const total = army.units.length;
+  const done = army.units.filter(u => u.stage === FINISHED).length;
+  return { total, done, pct: total ? Math.round((done / total) * 100) : 0 };
+}
+function totalUnfinished() {
+  let units = 0, models = 0;
+  state.armies.forEach(a => a.units.forEach(u => {
+    if (u.stage !== FINISHED) { units++; models += u.modelCount; }
+  }));
+  return { units, models };
+}
+
+function mutate(fn) { fn(); save(); render(); }
+
+// ---------- Render ----------
+function render() {
+  renderCounter();
+  renderSidebar();
+  renderMain();
+}
+
+function renderCounter() {
+  const { units, models } = totalUnfinished();
+  $("#counter").innerHTML = `Pile of shame: <b>${units}</b> unit${units === 1 ? "" : "s"} · <b>${models}</b> model${models === 1 ? "" : "s"} unfinished`;
+}
+
+function renderSidebar() {
+  const list = $("#army-list");
+  if (!state.armies.length) {
+    list.innerHTML = `<p style="color:var(--muted);font-size:13px">No armies yet. Click <b>+ Add</b> to start your pile.</p>`;
+    return;
+  }
+  list.innerHTML = state.armies.map(a => {
+    const p = armyProgress(a);
+    return `<button class="army-item ${a.id === selectedArmyId ? "active" : ""}" data-army="${a.id}">
+      <div class="name">${esc(a.name)}</div>
+      ${a.game ? `<div class="game">${esc(a.game)}</div>` : ""}
+      <div class="prog">${p.done}/${p.total} finished${p.total ? ` · ${p.pct}%` : ""}</div>
+      <div class="bar"><span style="width:${p.pct}%"></span></div>
+    </button>`;
+  }).join("");
+  list.querySelectorAll("[data-army]").forEach(el => {
+    el.onclick = () => { selectedArmyId = el.dataset.army; render(); };
+  });
+}
+
+function renderMain() {
+  const main = $("#main");
+  const army = findArmy(selectedArmyId);
+  if (!army) {
+    main.innerHTML = `<div class="empty"><h2>Welcome to your Pile of Shame 🎖️</h2>
+      <p>Create an army on the left to start tracking your miniatures.</p></div>`;
+    return;
+  }
+  const scheme = army.schemeId ? findScheme(army.schemeId) : null;
+  const p = armyProgress(army);
+
+  const rows = army.units.length ? army.units.map(u => {
+    const eff = effectiveScheme(army, u);
+    return `<tr>
+      <td>
+        <div class="unit-name">${esc(u.name)}</div>
+        ${u.notes ? `<div class="unit-notes">${esc(u.notes)}</div>` : ""}
+      </td>
+      <td>${u.modelCount}</td>
+      <td>${stageSelect(u)}</td>
+      <td>${schemeCell(eff, u.schemeId ? "override" : (army.schemeId ? "army" : "none"))}</td>
+      <td>
+        <div class="row-actions">
+          <button class="small" data-edit-unit="${u.id}">Edit</button>
+          <button class="small danger" data-del-unit="${u.id}">✕</button>
+        </div>
+      </td>
+    </tr>`;
+  }).join("") : "";
+
+  main.innerHTML = `
+    <div class="main-head">
+      <h2>${esc(army.name)}</h2>
+      ${army.game ? `<span class="meta">· ${esc(army.game)}</span>` : ""}
+      <span class="meta">· ${p.done}/${p.total} finished</span>
+      ${scheme ? `<span class="meta">· scheme: ${esc(scheme.name)}</span>` : ""}
+      <div class="spacer"></div>
+      <button class="small" data-edit-army="${army.id}">Edit army</button>
+      <button class="small danger" data-del-army="${army.id}">Delete army</button>
+      <button class="primary" id="btn-add-unit">+ Add unit</button>
+    </div>
+    ${army.notes ? `<p class="meta" style="margin-top:-8px">${esc(army.notes)}</p>` : ""}
+    ${army.units.length ? `
+      <table>
+        <thead><tr><th>Unit</th><th>Models</th><th>Stage</th><th>Paint scheme</th><th></th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>` : `<div class="empty">No units yet. Add your first unit to this army.</div>`}
+  `;
+
+  // Wire up
+  $("#btn-add-unit").onclick = () => openUnitModal(army, null);
+  main.querySelector(`[data-edit-army="${army.id}"]`).onclick = () => openArmyModal(army);
+  main.querySelector(`[data-del-army="${army.id}"]`).onclick = () => deleteArmy(army);
+  main.querySelectorAll("[data-edit-unit]").forEach(el => {
+    el.onclick = () => openUnitModal(army, army.units.find(u => u.id === el.dataset.editUnit));
+  });
+  main.querySelectorAll("[data-del-unit]").forEach(el => {
+    el.onclick = () => {
+      const u = army.units.find(x => x.id === el.dataset.delUnit);
+      if (confirm(`Delete unit "${u.name}"?`)) mutate(() => { army.units = army.units.filter(x => x.id !== u.id); });
+    };
+  });
+  main.querySelectorAll("select.stage").forEach(el => {
+    el.onchange = () => mutate(() => {
+      const u = army.units.find(x => x.id === el.dataset.unit);
+      if (u) u.stage = el.value;
+    });
+  });
+}
+
+function stageSelect(unit) {
+  const d = stageDef(unit.stage);
+  const opts = STAGES.map(s => `<option value="${s.id}" ${s.id === unit.stage ? "selected" : ""}>${s.label}</option>`).join("");
+  return `<span class="badge stage-badge" style="background:${d.color}22;color:${d.color};border-color:${d.color}55;margin-right:8px">${d.label}</span>
+    <select class="stage" data-unit="${unit.id}">${opts}</select>`;
+}
+
+function schemeCell(scheme, source) {
+  if (!scheme) return `<span class="meta" style="color:var(--muted)">—</span>`;
+  const dots = scheme.paints.slice(0, 8).map(p => `<span style="background:${p.hex}" title="${esc(p.name)}"></span>`).join("");
+  const tag = source === "override" ? " (override)" : "";
+  return `<div class="scheme-cell"><span class="swatches">${dots}</span> <span>${esc(scheme.name)}${tag}</span></div>`;
+}
+
+// ---------- Modal system ----------
+function openModal(html) {
+  $("#modal").innerHTML = html;
+  $("#overlay").hidden = false;
+}
+function closeModal() { $("#overlay").hidden = true; $("#modal").innerHTML = ""; }
+$("#overlay").addEventListener("click", e => { if (e.target.id === "overlay") closeModal(); });
+document.addEventListener("keydown", e => { if (e.key === "Escape" && !$("#overlay").hidden) closeModal(); });
+
+function schemeOptions(selectedId, includeInherit) {
+  let html = includeInherit ? `<option value="">(inherit army scheme)</option>` : `<option value="">(no scheme)</option>`;
+  html += state.schemes.map(s => `<option value="${s.id}" ${s.id === selectedId ? "selected" : ""}>${esc(s.name)}</option>`).join("");
+  return html;
+}
+
+// ---------- Army modal ----------
+function openArmyModal(army) {
+  const editing = !!army;
+  const a = army || { name: "", game: "", notes: "", schemeId: null };
+  openModal(`
+    <h3>${editing ? "Edit army" : "New army"}</h3>
+    <div class="field"><label>Army name</label><input id="f-name" value="${esc(a.name)}" placeholder="e.g. Ultramarines"></div>
+    <div class="row2">
+      <div class="field"><label>Game / system</label><input id="f-game" value="${esc(a.game)}" placeholder="e.g. Warhammer 40k"></div>
+      <div class="field"><label>Default paint scheme</label><select id="f-scheme">${schemeOptions(a.schemeId, false)}</select></div>
+    </div>
+    <div class="field"><label>Notes</label><textarea id="f-notes" rows="2">${esc(a.notes)}</textarea></div>
+    <div class="modal-actions">
+      <button class="ghost" id="m-cancel">Cancel</button>
+      <button class="primary" id="m-save">${editing ? "Save" : "Create army"}</button>
+    </div>
+  `);
+  $("#m-cancel").onclick = closeModal;
+  $("#f-name").focus();
+  $("#m-save").onclick = () => {
+    const name = $("#f-name").value.trim();
+    if (!name) { alert("Army name is required."); return; }
+    mutate(() => {
+      if (editing) {
+        a.name = name; a.game = $("#f-game").value.trim();
+        a.notes = $("#f-notes").value.trim(); a.schemeId = $("#f-scheme").value || null;
+      } else {
+        const na = { id: uid(), name, game: $("#f-game").value.trim(), notes: $("#f-notes").value.trim(), schemeId: $("#f-scheme").value || null, units: [] };
+        state.armies.push(na); selectedArmyId = na.id;
+      }
+    });
+    closeModal();
+  };
+}
+
+function deleteArmy(army) {
+  if (!confirm(`Delete army "${army.name}" and all its units? This cannot be undone.`)) return;
+  mutate(() => {
+    state.armies = state.armies.filter(a => a.id !== army.id);
+    if (selectedArmyId === army.id) selectedArmyId = state.armies[0]?.id || null;
+  });
+}
+
+// ---------- Unit modal ----------
+function openUnitModal(army, unit) {
+  const editing = !!unit;
+  const u = unit || { name: "", modelCount: 1, stage: "unassembled", schemeId: null, notes: "" };
+  const stageOpts = STAGES.map(s => `<option value="${s.id}" ${s.id === u.stage ? "selected" : ""}>${s.label}</option>`).join("");
+  openModal(`
+    <h3>${editing ? "Edit unit" : "New unit"} <span class="meta" style="font-size:14px">in ${esc(army.name)}</span></h3>
+    <div class="field"><label>Unit name</label><input id="f-name" value="${esc(u.name)}" placeholder="e.g. Intercessor Squad"></div>
+    <div class="row2">
+      <div class="field"><label>Model count</label><input id="f-count" type="number" min="0" step="1" value="${u.modelCount}"></div>
+      <div class="field"><label>Stage</label><select id="f-stage">${stageOpts}</select></div>
+    </div>
+    <div class="field"><label>Paint scheme</label><select id="f-scheme">${schemeOptions(u.schemeId, true)}</select></div>
+    <div class="field"><label>Notes</label><textarea id="f-notes" rows="2" placeholder="conversions, sub-assemblies, reminders...">${esc(u.notes)}</textarea></div>
+    <div class="modal-actions">
+      <button class="ghost" id="m-cancel">Cancel</button>
+      <button class="primary" id="m-save">${editing ? "Save" : "Add unit"}</button>
+    </div>
+  `);
+  $("#m-cancel").onclick = closeModal;
+  $("#f-name").focus();
+  $("#m-save").onclick = () => {
+    const name = $("#f-name").value.trim();
+    if (!name) { alert("Unit name is required."); return; }
+    mutate(() => {
+      const vals = {
+        name,
+        modelCount: Math.max(0, Math.floor(+$("#f-count").value || 0)),
+        stage: $("#f-stage").value,
+        schemeId: $("#f-scheme").value || null,
+        notes: $("#f-notes").value.trim(),
+      };
+      if (editing) Object.assign(u, vals);
+      else army.units.push({ id: uid(), ...vals });
+    });
+    closeModal();
+  };
+}
+
+// ---------- Scheme manager ----------
+function openSchemeManager() {
+  const blocks = state.schemes.length ? state.schemes.map(schemeBlock).join("") :
+    `<p class="meta">No schemes yet. Add one to reuse the same paint recipe across an army.</p>`;
+  openModal(`
+    <h3>🎨 Paint Schemes</h3>
+    <div id="scheme-blocks">${blocks}</div>
+    <button id="add-scheme">+ Add scheme</button>
+    <div class="modal-actions">
+      <button class="primary" id="m-close">Done</button>
+    </div>
+  `);
+  $("#m-close").onclick = () => { closeModal(); render(); };
+  $("#add-scheme").onclick = () => mutateNoRender(() => {
+    state.schemes.push({ id: uid(), name: "New scheme", paints: [] });
+  });
+  wireSchemeManager();
+}
+
+// Save without full re-render of the app; re-render only the scheme manager modal.
+function mutateNoRender(fn) { fn(); save(); openSchemeManager(); }
+
+function schemeBlock(s) {
+  const head = `
+    <div class="paint-row paint-head">
+      <div></div><div>Name</div><div>Brand / range</div><div>Role</div><div></div>
+    </div>`;
+  const rows = s.paints.map(p => `
+    <div class="paint-row" data-paint="${p.id}">
+      <input type="color" value="${p.hex}" data-k="hex">
+      <input value="${esc(p.name)}" data-k="name" placeholder="Macragge Blue">
+      <input value="${esc(p.brand)}" data-k="brand" placeholder="Citadel">
+      <select data-k="role" class="role-cell">${ROLES.map(r => `<option ${r === p.role ? "selected" : ""}>${r}</option>`).join("")}</select>
+      <button class="small danger del" title="Remove paint">✕</button>
+    </div>`).join("");
+  return `
+    <div class="scheme-block" data-scheme="${s.id}">
+      <div class="sb-head">
+        <input value="${esc(s.name)}" data-scheme-name placeholder="Scheme name">
+        <button class="small danger" data-del-scheme>Delete scheme</button>
+      </div>
+      ${s.paints.length ? head : ""}
+      <div class="paints">${rows}</div>
+      <button class="small" data-add-paint>+ Add paint</button>
+    </div>`;
+}
+
+function wireSchemeManager() {
+  document.querySelectorAll("[data-scheme]").forEach(block => {
+    const s = findScheme(block.dataset.scheme);
+    if (!s) return;
+    block.querySelector("[data-scheme-name]").onchange = e => { s.name = e.target.value.trim() || "Untitled scheme"; save(); };
+    block.querySelector("[data-del-scheme]").onclick = () => {
+      if (!confirm(`Delete scheme "${s.name}"? Armies/units using it will fall back to no scheme.`)) return;
+      mutateNoRender(() => {
+        state.schemes = state.schemes.filter(x => x.id !== s.id);
+        state.armies.forEach(a => {
+          if (a.schemeId === s.id) a.schemeId = null;
+          a.units.forEach(u => { if (u.schemeId === s.id) u.schemeId = null; });
+        });
+      });
+    };
+    block.querySelector("[data-add-paint]").onclick = () => mutateNoRender(() => {
+      s.paints.push({ id: uid(), name: "", brand: "", role: "base", hex: "#888888" });
+    });
+    block.querySelectorAll("[data-paint]").forEach(prow => {
+      const p = s.paints.find(x => x.id === prow.dataset.paint);
+      if (!p) return;
+      prow.querySelectorAll("[data-k]").forEach(inp => {
+        inp.onchange = () => { p[inp.dataset.k] = inp.value; save(); };
+      });
+      prow.querySelector(".del").onclick = () => mutateNoRender(() => {
+        s.paints = s.paints.filter(x => x.id !== p.id);
+      });
+    });
+  });
+}
+
+// ---------- Export / Import / Reset ----------
+function exportData() {
+  const d = new Date();
+  const stamp = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  const blob = new Blob([JSON.stringify(state, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = `pile-of-shame-${stamp}.json`;
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+}
+function importData(file) {
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const parsed = JSON.parse(reader.result);
+      const clean = normalize(parsed);
+      if (!confirm("Import will replace your current data. Continue?")) return;
+      state = clean;
+      selectedArmyId = state.armies[0]?.id || null;
+      save(); render();
+      alert("Import successful.");
+    } catch (e) {
+      alert("Could not import file — it doesn't look like a valid Pile of Shame backup.\n\n" + e.message);
+    }
+  };
+  reader.onerror = () => alert("Failed to read the file.");
+  reader.readAsText(file);
+}
+
+// ---------- Top bar wiring ----------
+$("#btn-add-army").onclick = () => openArmyModal(null);
+$("#btn-schemes").onclick = openSchemeManager;
+$("#btn-export").onclick = exportData;
+$("#btn-import").onclick = () => $("#import-file").click();
+$("#import-file").onchange = e => { if (e.target.files[0]) importData(e.target.files[0]); e.target.value = ""; };
+$("#btn-reset").onclick = () => {
+  if (!confirm("Reset ALL data? This clears every army, unit and scheme. Export a backup first if unsure.")) return;
+  state = seed(); selectedArmyId = null; save(); render();
+};
+
+// ---------- Go ----------
+render();
+</script>
+</body>
+</html>
