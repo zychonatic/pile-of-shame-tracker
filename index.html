@@ -149,6 +149,9 @@
   .scheme-block { border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; margin-bottom: 14px; }
   .scheme-block .sb-head { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; }
   .scheme-block .sb-head input { flex: 1; }
+  .section-block { border: 1px dashed var(--border); border-radius: 8px; padding: 10px 12px; margin: 10px 0; background: var(--panel-2); }
+  .section-block .sec-head { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+  .section-block .sec-head input { flex: 1; font-weight: 600; }
 
   @media (max-width: 720px) {
     aside { width: 100%; border-right: none; border-bottom: 1px solid var(--border); }
@@ -237,17 +240,29 @@ function normalize(data) {
   if (!data || typeof data !== "object") throw new Error("not an object");
   const out = { version: 1, schemes: [], armies: [] };
   if (Array.isArray(data.schemes)) {
-    out.schemes = data.schemes.map(s => ({
-      id: s.id || uid(),
-      name: String(s.name || "Untitled scheme"),
-      paints: Array.isArray(s.paints) ? s.paints.map(p => ({
-        id: p.id || uid(),
-        name: String(p.name || ""),
-        brand: String(p.brand || ""),
-        role: ROLES.includes(p.role) ? p.role : "base",
-        hex: /^#[0-9a-fA-F]{6}$/.test(p.hex) ? p.hex : "#888888",
-      })) : [],
-    }));
+    const normPaint = p => ({
+      id: p.id || uid(),
+      name: String(p.name || ""),
+      brand: String(p.brand || ""),
+      role: ROLES.includes(p.role) ? p.role : "base",
+      hex: /^#[0-9a-fA-F]{6}$/.test(p.hex) ? p.hex : "#888888",
+    });
+    out.schemes = data.schemes.map(s => {
+      let sections;
+      if (Array.isArray(s.sections)) {
+        sections = s.sections.map(sec => ({
+          id: sec.id || uid(),
+          name: String(sec.name || ""),
+          paints: Array.isArray(sec.paints) ? sec.paints.map(normPaint) : [],
+        }));
+      } else if (Array.isArray(s.paints)) {
+        // Migrate old flat-paint schemes into a single default section.
+        sections = [{ id: uid(), name: "General", paints: s.paints.map(normPaint) }];
+      } else {
+        sections = [];
+      }
+      return { id: s.id || uid(), name: String(s.name || "Untitled scheme"), sections };
+    });
   }
   if (Array.isArray(data.armies)) {
     const schemeIds = new Set(out.schemes.map(s => s.id));
@@ -408,7 +423,8 @@ function stageSelect(unit) {
 
 function schemeCell(scheme, source) {
   if (!scheme) return `<span class="meta" style="color:var(--muted)">—</span>`;
-  const dots = scheme.paints.slice(0, 8).map(p => `<span style="background:${p.hex}" title="${esc(p.name)}"></span>`).join("");
+  const allPaints = scheme.sections.flatMap(sec => sec.paints);
+  const dots = allPaints.slice(0, 8).map(p => `<span style="background:${p.hex}" title="${esc((p.name || "paint"))}"></span>`).join("");
   const tag = source === "override" ? " (override)" : "";
   return `<div class="scheme-cell"><span class="swatches">${dots}</span> <span>${esc(scheme.name)}${tag}</span></div>`;
 }
@@ -524,7 +540,7 @@ function openSchemeManager() {
   `);
   $("#m-close").onclick = () => { closeModal(); render(); };
   $("#add-scheme").onclick = () => mutateNoRender(() => {
-    state.schemes.push({ id: uid(), name: "New scheme", paints: [] });
+    state.schemes.push({ id: uid(), name: "New scheme", sections: [{ id: uid(), name: "", paints: [] }] });
   });
   wireSchemeManager();
 }
@@ -533,11 +549,24 @@ function openSchemeManager() {
 function mutateNoRender(fn) { fn(); save(); openSchemeManager(); }
 
 function schemeBlock(s) {
+  const sections = s.sections.map(sectionBlock).join("");
+  return `
+    <div class="scheme-block" data-scheme="${s.id}">
+      <div class="sb-head">
+        <input value="${esc(s.name)}" data-scheme-name placeholder="Scheme name">
+        <button class="small danger" data-del-scheme>Delete scheme</button>
+      </div>
+      <div class="sections">${sections || `<p class="meta">No color sections yet. Add one below (e.g. Skin, Armor).</p>`}</div>
+      <button class="small" data-add-section>+ Add color section</button>
+    </div>`;
+}
+
+function sectionBlock(sec) {
   const head = `
     <div class="paint-row paint-head">
       <div></div><div>Name</div><div>Brand / range</div><div>Role</div><div></div>
     </div>`;
-  const rows = s.paints.map(p => `
+  const rows = sec.paints.map(p => `
     <div class="paint-row" data-paint="${p.id}">
       <input type="color" value="${p.hex}" data-k="hex">
       <input value="${esc(p.name)}" data-k="name" placeholder="Macragge Blue">
@@ -546,12 +575,12 @@ function schemeBlock(s) {
       <button class="small danger del" title="Remove paint">✕</button>
     </div>`).join("");
   return `
-    <div class="scheme-block" data-scheme="${s.id}">
-      <div class="sb-head">
-        <input value="${esc(s.name)}" data-scheme-name placeholder="Scheme name">
-        <button class="small danger" data-del-scheme>Delete scheme</button>
+    <div class="section-block" data-section="${sec.id}">
+      <div class="sec-head">
+        <input value="${esc(sec.name)}" data-section-name placeholder="Section (e.g. Skin, Armor, Base)">
+        <button class="small danger" data-del-section title="Remove section">✕ Section</button>
       </div>
-      ${s.paints.length ? head : ""}
+      ${sec.paints.length ? head : ""}
       <div class="paints">${rows}</div>
       <button class="small" data-add-paint>+ Add paint</button>
     </div>`;
@@ -572,17 +601,29 @@ function wireSchemeManager() {
         });
       });
     };
-    block.querySelector("[data-add-paint]").onclick = () => mutateNoRender(() => {
-      s.paints.push({ id: uid(), name: "", brand: "", role: "base", hex: "#888888" });
+    block.querySelector("[data-add-section]").onclick = () => mutateNoRender(() => {
+      s.sections.push({ id: uid(), name: "", paints: [] });
     });
-    block.querySelectorAll("[data-paint]").forEach(prow => {
-      const p = s.paints.find(x => x.id === prow.dataset.paint);
-      if (!p) return;
-      prow.querySelectorAll("[data-k]").forEach(inp => {
-        inp.onchange = () => { p[inp.dataset.k] = inp.value; save(); };
+    block.querySelectorAll("[data-section]").forEach(secEl => {
+      const sec = s.sections.find(x => x.id === secEl.dataset.section);
+      if (!sec) return;
+      secEl.querySelector("[data-section-name]").onchange = e => { sec.name = e.target.value.trim(); save(); };
+      secEl.querySelector("[data-del-section]").onclick = () => {
+        if (sec.paints.length && !confirm(`Remove section "${sec.name || "unnamed"}" and its ${sec.paints.length} paint(s)?`)) return;
+        mutateNoRender(() => { s.sections = s.sections.filter(x => x.id !== sec.id); });
+      };
+      secEl.querySelector("[data-add-paint]").onclick = () => mutateNoRender(() => {
+        sec.paints.push({ id: uid(), name: "", brand: "", role: "base", hex: "#888888" });
       });
-      prow.querySelector(".del").onclick = () => mutateNoRender(() => {
-        s.paints = s.paints.filter(x => x.id !== p.id);
+      secEl.querySelectorAll("[data-paint]").forEach(prow => {
+        const p = sec.paints.find(x => x.id === prow.dataset.paint);
+        if (!p) return;
+        prow.querySelectorAll("[data-k]").forEach(inp => {
+          inp.onchange = () => { p[inp.dataset.k] = inp.value; save(); };
+        });
+        prow.querySelector(".del").onclick = () => mutateNoRender(() => {
+          sec.paints = sec.paints.filter(x => x.id !== p.id);
+        });
       });
     });
   });
