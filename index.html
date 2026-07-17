@@ -55,6 +55,8 @@
   input[type=color] { padding: 2px; height: 34px; cursor: pointer; }
   label { display: block; font-size: 12px; color: var(--muted); margin: 0 0 4px; }
   .field { margin-bottom: 12px; }
+  label.radio-opt { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--text); margin: 6px 0; cursor: pointer; }
+  label.radio-opt input[type=radio] { width: auto; margin: 0; }
   a { color: var(--accent-2); }
 
   /* Layout */
@@ -146,6 +148,8 @@
   .paint-row { display: grid; grid-template-columns: 46px 1fr 1fr 130px 32px; gap: 8px; align-items: center; margin-bottom: 8px; }
   .paint-row .del { padding: 4px 8px; }
   .paint-head { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+  .scheme-list-row { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 8px; }
+  .scheme-list-row .scheme-list-name { flex: 1; font-weight: 600; }
   .scheme-block { border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; margin-bottom: 14px; }
   .scheme-block .sb-head { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; }
   .scheme-block .sb-head input { flex: 1; }
@@ -153,12 +157,36 @@
   .section-block .sec-head { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
   .section-block .sec-head input { flex: 1; font-weight: 600; }
 
+  /* Print list */
+  #print-area { display: none; }
+  #print-area .print-army { page-break-inside: avoid; margin-bottom: 22px; }
+  #print-area .print-notes { font-style: italic; }
+
   @media (max-width: 720px) {
     aside { width: 100%; border-right: none; border-bottom: 1px solid var(--border); }
     .layout { flex-direction: column; }
     .paint-row { grid-template-columns: 40px 1fr 90px 30px; }
     .paint-row .role-cell { grid-column: 2 / span 2; }
     .row2 { grid-template-columns: 1fr; }
+  }
+
+  @media print {
+    html, body { background: #fff !important; }
+    body > *:not(#print-area) { display: none !important; }
+    #print-area {
+      display: block; color: #000; background: #fff;
+      font-family: Georgia, "Times New Roman", serif; padding: 0;
+    }
+    #print-area h1 { font-size: 22px; margin: 0 0 2px; }
+    #print-area .print-sub { color: #444; margin: 0 0 20px; font-family: system-ui, sans-serif; font-size: 12px; }
+    #print-area h2 { font-size: 16px; margin: 0 0 6px; border-bottom: 1px solid #000; padding-bottom: 3px; }
+    #print-area h2 .print-game { font-weight: normal; color: #555; font-size: 13px; }
+    #print-area table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    #print-area th, #print-area td { text-align: left; padding: 4px 8px; border-bottom: 1px solid #bbb; vertical-align: top; }
+    #print-area th { border-bottom: 1px solid #000; }
+    #print-area td.num { text-align: right; white-space: nowrap; }
+    #print-area .print-total { margin-top: 16px; font-family: system-ui, sans-serif; font-size: 13px; font-weight: bold; }
+    #print-area .print-notes { color: #333; font-size: 11px; }
   }
 </style>
 </head>
@@ -170,6 +198,7 @@
   <div class="spacer"></div>
   <div class="topbar-actions">
     <button id="btn-schemes">🎨 Paint Schemes</button>
+    <button id="btn-print">🖨 Download list</button>
     <button id="btn-export">⬇ Export</button>
     <button id="btn-import">⬆ Import</button>
     <button id="btn-reset" class="danger">Reset</button>
@@ -193,6 +222,9 @@
 <div class="overlay" id="overlay" hidden>
   <div class="modal" id="modal"></div>
 </div>
+
+<!-- Printable model list (hidden on screen, shown only when printing) -->
+<div id="print-area" aria-hidden="true"></div>
 
 <script>
 "use strict";
@@ -526,39 +558,83 @@ function openUnitModal(army, unit) {
   };
 }
 
-// ---------- Scheme manager ----------
+// ---------- Scheme manager (list view) ----------
 function openSchemeManager() {
-  const blocks = state.schemes.length ? state.schemes.map(schemeBlock).join("") :
+  const rows = state.schemes.length ? state.schemes.map(schemeListRow).join("") :
     `<p class="meta">No schemes yet. Add one to reuse the same paint recipe across an army.</p>`;
   openModal(`
     <h3>🎨 Paint Schemes</h3>
-    <div id="scheme-blocks">${blocks}</div>
+    <div id="scheme-list">${rows}</div>
     <button id="add-scheme">+ Add scheme</button>
     <div class="modal-actions">
       <button class="primary" id="m-close">Done</button>
     </div>
   `);
   $("#m-close").onclick = () => { closeModal(); render(); };
-  $("#add-scheme").onclick = () => mutateNoRender(() => {
-    state.schemes.push({ id: uid(), name: "New scheme", sections: [{ id: uid(), name: "", paints: [] }] });
-  });
-  wireSchemeManager();
+  $("#add-scheme").onclick = () => {
+    const id = uid();
+    state.schemes.push({ id, name: "New scheme", sections: [{ id: uid(), name: "", paints: [] }] });
+    save();
+    openSchemeEditor(id);
+  };
+  wireSchemeList();
 }
 
-// Save without full re-render of the app; re-render only the scheme manager modal.
-function mutateNoRender(fn) { fn(); save(); openSchemeManager(); }
+// Save without full re-render of the app; re-render only the current modal view.
+function mutateNoRender(fn, rerender) { fn(); save(); rerender(); }
 
-function schemeBlock(s) {
-  const sections = s.sections.map(sectionBlock).join("");
+function schemeListRow(s) {
+  const allPaints = s.sections.flatMap(sec => sec.paints);
+  const dots = allPaints.slice(0, 8).map(p => `<span style="background:${p.hex}" title="${esc(p.name || "paint")}"></span>`).join("");
   return `
+    <div class="scheme-list-row" data-scheme="${s.id}">
+      <span class="swatches">${dots}</span>
+      <span class="scheme-list-name">${esc(s.name) || "Untitled scheme"}</span>
+      <button class="small" data-edit-scheme>Edit</button>
+      <button class="small danger" data-del-scheme>Delete</button>
+    </div>`;
+}
+
+function wireSchemeList() {
+  document.querySelectorAll("#scheme-list [data-scheme]").forEach(row => {
+    const s = findScheme(row.dataset.scheme);
+    if (!s) return;
+    row.querySelector("[data-edit-scheme]").onclick = () => openSchemeEditor(s.id);
+    row.querySelector("[data-del-scheme]").onclick = () => {
+      if (!confirm(`Delete scheme "${s.name}"? Armies/units using it will fall back to no scheme.`)) return;
+      mutateNoRender(() => {
+        state.schemes = state.schemes.filter(x => x.id !== s.id);
+        state.armies.forEach(a => {
+          if (a.schemeId === s.id) a.schemeId = null;
+          a.units.forEach(u => { if (u.schemeId === s.id) u.schemeId = null; });
+        });
+      }, openSchemeManager);
+    };
+  });
+}
+
+// ---------- Single-scheme editor view ----------
+function openSchemeEditor(schemeId) {
+  const s = findScheme(schemeId);
+  if (!s) { openSchemeManager(); return; }
+  const sections = s.sections.map(sectionBlock).join("");
+  openModal(`
+    <div class="sb-head">
+      <button class="small" id="scheme-back">← Back</button>
+      <input value="${esc(s.name)}" data-scheme-name placeholder="Scheme name">
+      <button class="small danger" data-del-scheme>Delete scheme</button>
+    </div>
     <div class="scheme-block" data-scheme="${s.id}">
-      <div class="sb-head">
-        <input value="${esc(s.name)}" data-scheme-name placeholder="Scheme name">
-        <button class="small danger" data-del-scheme>Delete scheme</button>
-      </div>
       <div class="sections">${sections || `<p class="meta">No color sections yet. Add one below (e.g. Skin, Armor).</p>`}</div>
       <button class="small" data-add-section>+ Add color section</button>
-    </div>`;
+    </div>
+    <div class="modal-actions">
+      <button class="primary" id="m-close">Done</button>
+    </div>
+  `);
+  $("#scheme-back").onclick = openSchemeManager;
+  $("#m-close").onclick = () => { closeModal(); render(); };
+  wireSchemeEditor(s);
 }
 
 function sectionBlock(sec) {
@@ -586,45 +662,42 @@ function sectionBlock(sec) {
     </div>`;
 }
 
-function wireSchemeManager() {
-  document.querySelectorAll("[data-scheme]").forEach(block => {
-    const s = findScheme(block.dataset.scheme);
-    if (!s) return;
-    block.querySelector("[data-scheme-name]").onchange = e => { s.name = e.target.value.trim() || "Untitled scheme"; save(); };
-    block.querySelector("[data-del-scheme]").onclick = () => {
-      if (!confirm(`Delete scheme "${s.name}"? Armies/units using it will fall back to no scheme.`)) return;
-      mutateNoRender(() => {
-        state.schemes = state.schemes.filter(x => x.id !== s.id);
-        state.armies.forEach(a => {
-          if (a.schemeId === s.id) a.schemeId = null;
-          a.units.forEach(u => { if (u.schemeId === s.id) u.schemeId = null; });
-        });
+function wireSchemeEditor(s) {
+  const rerender = () => openSchemeEditor(s.id);
+  document.querySelector("[data-scheme-name]").onchange = e => { s.name = e.target.value.trim() || "Untitled scheme"; save(); };
+  document.querySelector("[data-del-scheme]").onclick = () => {
+    if (!confirm(`Delete scheme "${s.name}"? Armies/units using it will fall back to no scheme.`)) return;
+    mutateNoRender(() => {
+      state.schemes = state.schemes.filter(x => x.id !== s.id);
+      state.armies.forEach(a => {
+        if (a.schemeId === s.id) a.schemeId = null;
+        a.units.forEach(u => { if (u.schemeId === s.id) u.schemeId = null; });
       });
+    }, openSchemeManager);
+  };
+  document.querySelector("[data-add-section]").onclick = () => mutateNoRender(() => {
+    s.sections.push({ id: uid(), name: "", paints: [] });
+  }, rerender);
+  document.querySelectorAll("[data-section]").forEach(secEl => {
+    const sec = s.sections.find(x => x.id === secEl.dataset.section);
+    if (!sec) return;
+    secEl.querySelector("[data-section-name]").onchange = e => { sec.name = e.target.value.trim(); save(); };
+    secEl.querySelector("[data-del-section]").onclick = () => {
+      if (sec.paints.length && !confirm(`Remove section "${sec.name || "unnamed"}" and its ${sec.paints.length} paint(s)?`)) return;
+      mutateNoRender(() => { s.sections = s.sections.filter(x => x.id !== sec.id); }, rerender);
     };
-    block.querySelector("[data-add-section]").onclick = () => mutateNoRender(() => {
-      s.sections.push({ id: uid(), name: "", paints: [] });
-    });
-    block.querySelectorAll("[data-section]").forEach(secEl => {
-      const sec = s.sections.find(x => x.id === secEl.dataset.section);
-      if (!sec) return;
-      secEl.querySelector("[data-section-name]").onchange = e => { sec.name = e.target.value.trim(); save(); };
-      secEl.querySelector("[data-del-section]").onclick = () => {
-        if (sec.paints.length && !confirm(`Remove section "${sec.name || "unnamed"}" and its ${sec.paints.length} paint(s)?`)) return;
-        mutateNoRender(() => { s.sections = s.sections.filter(x => x.id !== sec.id); });
-      };
-      secEl.querySelector("[data-add-paint]").onclick = () => mutateNoRender(() => {
-        sec.paints.push({ id: uid(), name: "", brand: "", role: "base", hex: "#888888" });
+    secEl.querySelector("[data-add-paint]").onclick = () => mutateNoRender(() => {
+      sec.paints.push({ id: uid(), name: "", brand: "", role: "base", hex: "#888888" });
+    }, rerender);
+    secEl.querySelectorAll("[data-paint]").forEach(prow => {
+      const p = sec.paints.find(x => x.id === prow.dataset.paint);
+      if (!p) return;
+      prow.querySelectorAll("[data-k]").forEach(inp => {
+        inp.onchange = () => { p[inp.dataset.k] = inp.value; save(); };
       });
-      secEl.querySelectorAll("[data-paint]").forEach(prow => {
-        const p = sec.paints.find(x => x.id === prow.dataset.paint);
-        if (!p) return;
-        prow.querySelectorAll("[data-k]").forEach(inp => {
-          inp.onchange = () => { p[inp.dataset.k] = inp.value; save(); };
-        });
-        prow.querySelector(".del").onclick = () => mutateNoRender(() => {
-          sec.paints = sec.paints.filter(x => x.id !== p.id);
-        });
-      });
+      prow.querySelector(".del").onclick = () => mutateNoRender(() => {
+        sec.paints = sec.paints.filter(x => x.id !== p.id);
+      }, rerender);
     });
   });
 }
@@ -659,9 +732,77 @@ function importData(file) {
   reader.readAsText(file);
 }
 
+// ---------- Printable model list ----------
+function openPrintModal() {
+  openModal(`
+    <h3>🖨 Download / print list</h3>
+    <div class="field">
+      <label>Which models?</label>
+      <label class="radio-opt"><input type="radio" name="print-scope" value="all" checked> All models</label>
+      <label class="radio-opt"><input type="radio" name="print-scope" value="unfinished"> Unfinished only</label>
+    </div>
+    <div class="modal-actions">
+      <button id="m-cancel">Cancel</button>
+      <button class="primary" id="m-print">Download / Print</button>
+    </div>
+  `);
+  $("#m-cancel").onclick = closeModal;
+  $("#m-print").onclick = () => {
+    const unfinishedOnly = document.querySelector("input[name='print-scope']:checked").value === "unfinished";
+    closeModal();
+    printModelList(unfinishedOnly);
+  };
+}
+
+function buildModelListHtml(unfinishedOnly) {
+  const d = new Date();
+  const stamp = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  const scopeLabel = unfinishedOnly ? "Unfinished models only" : "All models";
+
+  let totalUnits = 0, totalModels = 0;
+  const armyBlocks = state.armies.map(army => {
+    const units = unfinishedOnly ? army.units.filter(u => u.stage !== FINISHED) : army.units.slice();
+    if (!units.length) return "";
+    const rows = units.map(u => {
+      totalUnits++; totalModels += u.modelCount;
+      const scheme = effectiveScheme(army, u);
+      return `<tr>
+        <td>${esc(u.name)}${u.notes ? `<div class="print-notes">${esc(u.notes)}</div>` : ""}</td>
+        <td class="num">${u.modelCount}</td>
+        <td>${esc(stageDef(u.stage).label)}</td>
+        <td>${scheme ? esc(scheme.name) : "—"}</td>
+      </tr>`;
+    }).join("");
+    return `<div class="print-army">
+      <h2>${esc(army.name)}${army.game ? ` <span class="print-game">— ${esc(army.game)}</span>` : ""}</h2>
+      <table>
+        <thead><tr><th>Unit</th><th class="num">Models</th><th>Stage</th><th>Scheme</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`;
+  }).join("");
+
+  const body = armyBlocks ||
+    `<p>No models to list${unfinishedOnly ? " — everything is finished! 🎉" : "."}</p>`;
+  const total = armyBlocks
+    ? `<p class="print-total">Total: ${totalUnits} unit${totalUnits === 1 ? "" : "s"} · ${totalModels} model${totalModels === 1 ? "" : "s"}</p>`
+    : "";
+
+  return `<h1>🎖️ Pile of Shame — Model List</h1>
+    <p class="print-sub">${scopeLabel} · ${stamp}</p>
+    ${body}
+    ${total}`;
+}
+
+function printModelList(unfinishedOnly) {
+  $("#print-area").innerHTML = buildModelListHtml(unfinishedOnly);
+  window.print();
+}
+
 // ---------- Top bar wiring ----------
 $("#btn-add-army").onclick = () => openArmyModal(null);
 $("#btn-schemes").onclick = openSchemeManager;
+$("#btn-print").onclick = openPrintModal;
 $("#btn-export").onclick = exportData;
 $("#btn-import").onclick = () => $("#import-file").click();
 $("#import-file").onchange = e => { if (e.target.files[0]) importData(e.target.files[0]); e.target.value = ""; };
