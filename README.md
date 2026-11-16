@@ -11,7 +11,8 @@ Just open `index.html` in any browser (double-click it). No install, no server, 
   (Unassembled → Assembled → Primed → Painting → Based → Finished). Change a unit's stage
   inline from the dropdown.
 - **Pile of shame counter** — the top bar shows how many units across all armies are still unfinished.
-- **Paint Schemes** — build reusable colorschemes (name, brand/range, role, hex swatch),
+- **Paint Schemes** — build reusable colorschemes (name, brand/range, role, hex swatch) as well as
+  paint mixes (e.g. 2 parts A + 1 part B, with an approximate blended swatch),
   attach a default scheme to an army, and optionally override it per unit.
 
 ## Saving your data

@@ -147,6 +147,14 @@
   /* Paint editor */
   .paint-row { display: grid; grid-template-columns: 46px 1fr 1fr 130px 32px; gap: 8px; align-items: center; margin-bottom: 8px; }
   .paint-row .del { padding: 4px 8px; }
+  .mix-block { border-left: 3px solid var(--border); padding-left: 8px; margin-bottom: 10px; }
+  .mix-block > .paint-row .mix-name { grid-column: 2 / span 2; }
+  .mix-swatch { width: 100%; height: 30px; border-radius: 6px; border: 1px solid var(--border); position: relative; }
+  .mix-swatch::after { content: "MIX"; position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 9px; font-weight: 700; color: #fff; text-shadow: 0 0 3px #000; }
+  .mix-comps { margin-left: 16px; }
+  .mix-comp-row { display: grid; grid-template-columns: 46px 1fr 1fr 70px 32px; gap: 8px; align-items: center; margin-bottom: 6px; }
+  .mix-comp-row .del { padding: 4px 8px; }
+  .mix-comps .paint-head { margin-bottom: 4px; }
   .paint-head { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
   .scheme-list-row { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 8px; }
   .scheme-list-row .scheme-list-name { flex: 1; font-weight: 600; }
@@ -167,6 +175,10 @@
     .layout { flex-direction: column; }
     .paint-row { grid-template-columns: 40px 1fr 90px 30px; }
     .paint-row .role-cell { grid-column: 2 / span 2; }
+    .mix-block > .paint-row .mix-name { grid-column: 2 / span 2; }
+    .mix-comps { margin-left: 4px; }
+    .mix-comp-row { grid-template-columns: 40px 1fr 60px 30px; }
+    .mix-comp-row [data-ck="brand"] { grid-column: 2 / span 2; grid-row: 2; }
     .row2 { grid-template-columns: 1fr; }
   }
 
@@ -272,13 +284,29 @@ function normalize(data) {
   if (!data || typeof data !== "object") throw new Error("not an object");
   const out = { version: 1, schemes: [], armies: [] };
   if (Array.isArray(data.schemes)) {
-    const normPaint = p => ({
-      id: p.id || uid(),
-      name: String(p.name || ""),
-      brand: String(p.brand || ""),
-      role: ROLES.includes(p.role) ? p.role : "base",
-      hex: /^#[0-9a-fA-F]{6}$/.test(p.hex) ? p.hex : "#888888",
-    });
+    const normHex = h => /^#[0-9a-fA-F]{6}$/.test(h) ? h : "#888888";
+    const normPaint = p => {
+      const base = {
+        id: p.id || uid(),
+        name: String(p.name || ""),
+        role: ROLES.includes(p.role) ? p.role : "base",
+      };
+      if (p.kind === "mix") {
+        const mix = {
+          ...base, kind: "mix",
+          components: Array.isArray(p.components) ? p.components.map(c => ({
+            id: c.id || uid(),
+            name: String(c.name || ""),
+            brand: String(c.brand || ""),
+            hex: normHex(c.hex),
+            parts: Number.isFinite(+c.parts) && +c.parts > 0 ? +c.parts : 1,
+          })) : [],
+        };
+        mix.hex = mixHex(mix);
+        return mix;
+      }
+      return { ...base, kind: "paint", brand: String(p.brand || ""), hex: normHex(p.hex) };
+    };
     out.schemes = data.schemes.map(s => {
       let sections;
       if (Array.isArray(s.sections)) {
@@ -321,6 +349,23 @@ function normalize(data) {
 const uid = () => (crypto.randomUUID ? crypto.randomUUID() : "id-" + Math.random().toString(36).slice(2) + Date.now());
 const $ = sel => document.querySelector(sel);
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+// Approximate the mixed color as a parts-weighted RGB average of the components.
+function mixHex(mix) {
+  const comps = mix.components || [];
+  const total = comps.reduce((n, c) => n + c.parts, 0);
+  if (!total) return "#888888";
+  const rgb = [0, 0, 0];
+  comps.forEach(c => {
+    for (let i = 0; i < 3; i++) rgb[i] += parseInt(c.hex.slice(1 + i * 2, 3 + i * 2), 16) * c.parts;
+  });
+  return "#" + rgb.map(v => Math.round(v / total).toString(16).padStart(2, "0")).join("");
+}
+function paintTitle(p) {
+  if (p.kind !== "mix") return p.name || "paint";
+  const recipe = p.components.map(c => `${c.parts}× ${c.name || "paint"}`).join(" + ");
+  return `${p.name || "Mix"}${recipe ? ` (${recipe})` : ""}`;
+}
 
 const findArmy = id => state.armies.find(a => a.id === id);
 const findScheme = id => state.schemes.find(s => s.id === id);
@@ -456,7 +501,7 @@ function stageSelect(unit) {
 function schemeCell(scheme, source) {
   if (!scheme) return `<span class="meta" style="color:var(--muted)">—</span>`;
   const allPaints = scheme.sections.flatMap(sec => sec.paints);
-  const dots = allPaints.slice(0, 8).map(p => `<span style="background:${p.hex}" title="${esc((p.name || "paint"))}"></span>`).join("");
+  const dots = allPaints.slice(0, 8).map(p => `<span style="background:${p.hex}" title="${esc(paintTitle(p))}"></span>`).join("");
   const tag = source === "override" ? " (override)" : "";
   return `<div class="scheme-cell"><span class="swatches">${dots}</span> <span>${esc(scheme.name)}${tag}</span></div>`;
 }
@@ -585,7 +630,7 @@ function mutateNoRender(fn, rerender) { fn(); save(); rerender(); }
 
 function schemeListRow(s) {
   const allPaints = s.sections.flatMap(sec => sec.paints);
-  const dots = allPaints.slice(0, 8).map(p => `<span style="background:${p.hex}" title="${esc(p.name || "paint")}"></span>`).join("");
+  const dots = allPaints.slice(0, 8).map(p => `<span style="background:${p.hex}" title="${esc(paintTitle(p))}"></span>`).join("");
   return `
     <div class="scheme-list-row" data-scheme="${s.id}">
       <span class="swatches">${dots}</span>
@@ -642,7 +687,7 @@ function sectionBlock(sec) {
     <div class="paint-row paint-head">
       <div></div><div>Name</div><div>Brand / range</div><div>Role</div><div></div>
     </div>`;
-  const rows = sec.paints.map(p => `
+  const rows = sec.paints.map(p => p.kind === "mix" ? mixBlock(p) : `
     <div class="paint-row" data-paint="${p.id}">
       <input type="color" value="${p.hex}" data-k="hex">
       <input value="${esc(p.name)}" data-k="name" placeholder="Macragge Blue">
@@ -659,6 +704,32 @@ function sectionBlock(sec) {
       ${sec.paints.length ? head : ""}
       <div class="paints">${rows}</div>
       <button class="small" data-add-paint>+ Add paint</button>
+      <button class="small" data-add-mix>+ Add mix</button>
+    </div>`;
+}
+
+function mixBlock(m) {
+  const comps = m.components.map(c => `
+    <div class="mix-comp-row" data-comp="${c.id}">
+      <input type="color" value="${c.hex}" data-ck="hex">
+      <input value="${esc(c.name)}" data-ck="name" placeholder="Paint name">
+      <input value="${esc(c.brand)}" data-ck="brand" placeholder="Brand">
+      <input type="number" min="0.1" step="any" value="${c.parts}" data-ck="parts" title="Parts in the mix">
+      <button class="small danger del" title="Remove component">✕</button>
+    </div>`).join("");
+  return `
+    <div class="mix-block" data-paint="${m.id}">
+      <div class="paint-row">
+        <div class="mix-swatch" style="background:${m.hex}" title="Approximate mixed color"></div>
+        <input class="mix-name" value="${esc(m.name)}" data-k="name" placeholder="Mix name (e.g. Skin midtone)">
+        <select data-k="role" class="role-cell">${ROLES.map(r => `<option ${r === m.role ? "selected" : ""}>${r}</option>`).join("")}</select>
+        <button class="small danger del" data-del-mix title="Remove mix">✕</button>
+      </div>
+      <div class="mix-comps">
+        ${m.components.length ? `<div class="mix-comp-row paint-head"><div></div><div>Paint</div><div>Brand</div><div>Parts</div><div></div></div>` : ""}
+        ${comps}
+        <button class="small" data-add-comp>+ Add paint to mix</button>
+      </div>
     </div>`;
 }
 
@@ -683,15 +754,24 @@ function wireSchemeEditor(s) {
     if (!sec) return;
     secEl.querySelector("[data-section-name]").onchange = e => { sec.name = e.target.value.trim(); save(); };
     secEl.querySelector("[data-del-section]").onclick = () => {
-      if (sec.paints.length && !confirm(`Remove section "${sec.name || "unnamed"}" and its ${sec.paints.length} paint(s)?`)) return;
+      if (sec.paints.length && !confirm(`Remove section "${sec.name || "unnamed"}" and its ${sec.paints.length} paint(s)/mix(es)?`)) return;
       mutateNoRender(() => { s.sections = s.sections.filter(x => x.id !== sec.id); }, rerender);
     };
     secEl.querySelector("[data-add-paint]").onclick = () => mutateNoRender(() => {
-      sec.paints.push({ id: uid(), name: "", brand: "", role: "base", hex: "#888888" });
+      sec.paints.push({ id: uid(), kind: "paint", name: "", brand: "", role: "base", hex: "#888888" });
+    }, rerender);
+    secEl.querySelector("[data-add-mix]").onclick = () => mutateNoRender(() => {
+      const mix = { id: uid(), kind: "mix", name: "", role: "base", components: [
+        { id: uid(), name: "", brand: "", hex: "#888888", parts: 1 },
+        { id: uid(), name: "", brand: "", hex: "#ffffff", parts: 1 },
+      ] };
+      mix.hex = mixHex(mix);
+      sec.paints.push(mix);
     }, rerender);
     secEl.querySelectorAll("[data-paint]").forEach(prow => {
       const p = sec.paints.find(x => x.id === prow.dataset.paint);
       if (!p) return;
+      if (p.kind === "mix") { wireMix(prow, p, sec, rerender); return; }
       prow.querySelectorAll("[data-k]").forEach(inp => {
         inp.onchange = () => { p[inp.dataset.k] = inp.value; save(); };
       });
@@ -699,6 +779,43 @@ function wireSchemeEditor(s) {
         sec.paints = sec.paints.filter(x => x.id !== p.id);
       }, rerender);
     });
+  });
+}
+
+function wireMix(el, m, sec, rerender) {
+  const swatch = el.querySelector(".mix-swatch");
+  el.querySelectorAll("[data-k]").forEach(inp => {
+    inp.onchange = () => { m[inp.dataset.k] = inp.value; save(); };
+  });
+  el.querySelector("[data-del-mix]").onclick = () => {
+    if (m.components.length && !confirm(`Remove mix "${m.name || "unnamed"}"?`)) return;
+    mutateNoRender(() => { sec.paints = sec.paints.filter(x => x.id !== m.id); }, rerender);
+  };
+  el.querySelector("[data-add-comp]").onclick = () => mutateNoRender(() => {
+    m.components.push({ id: uid(), name: "", brand: "", hex: "#888888", parts: 1 });
+    m.hex = mixHex(m);
+  }, rerender);
+  el.querySelectorAll("[data-comp]").forEach(crow => {
+    const c = m.components.find(x => x.id === crow.dataset.comp);
+    if (!c) return;
+    crow.querySelectorAll("[data-ck]").forEach(inp => {
+      const update = () => {
+        if (inp.dataset.ck === "parts") {
+          const v = +inp.value;
+          if (!(Number.isFinite(v) && v > 0)) return;
+          c.parts = v;
+        } else c[inp.dataset.ck] = inp.value;
+        m.hex = mixHex(m);
+        swatch.style.background = m.hex;
+        save();
+      };
+      inp.onchange = update;
+      if (inp.type === "color" || inp.dataset.ck === "parts") inp.oninput = update;
+    });
+    crow.querySelector(".del").onclick = () => mutateNoRender(() => {
+      m.components = m.components.filter(x => x.id !== c.id);
+      m.hex = mixHex(m);
+    }, rerender);
   });
 }
 
