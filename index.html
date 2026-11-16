@@ -1001,6 +1001,7 @@ async function findOrCreateGist() {
     if (hit) return { id: hit.id, created: false };
     if (list.length < 100) break;
   }
+  ensureStamp();
   const g = await gh("/gists", {
     method: "POST",
     body: JSON.stringify({ description: GIST_DESC, public: false, files: { [GIST_FILE]: { content: JSON.stringify(state, null, 2) } } }),
@@ -1019,7 +1020,21 @@ async function readRemote() {
   catch { throw new Error("The cloud copy in your gist is not valid Pile of Shame data. Fix or delete the gist file, then sync again."); }
 }
 
+// Data saved before sync existed has updatedAt 0; give it a real stamp before it is
+// shared so every device can tell versions apart.
+function ensureStamp() {
+  if (!state.updatedAt) { state.updatedAt = Date.now(); writeLocal(); }
+}
+
+// Canonical form of the user data (ignores updatedAt and key order).
+function canon(s) {
+  const n = normalize(JSON.parse(JSON.stringify(s)));
+  return JSON.stringify({ schemes: n.schemes, armies: n.armies });
+}
+function sameData(a, b) { return canon(a) === canon(b); }
+
 async function pushRemote() {
+  ensureStamp();
   // Snapshot first: edits made while the request is in flight get their own sync.
   const at = state.updatedAt;
   const content = JSON.stringify(state, null, 2);
@@ -1060,28 +1075,46 @@ async function runSync(retried) {
     throw e;
   }
 
-  const base = syncCfg.syncedAt || 0;
-  const localAt = state.updatedAt || 0;
-  // A device that never synced and has no data has nothing worth keeping.
-  const localChanged = localAt !== base && !(base === 0 && isEmptyState(state));
-  const remoteChanged = !!remote && remote.updatedAt !== base;
-
   if (!remote) {
     await pushRemote();
-  } else if (remote.updatedAt === localAt) {
-    syncCfg.syncedAt = localAt; // already identical
-  } else if (localChanged && remoteChanged) {
+    return finishSync();
+  }
+
+  // Compare actual content: version stamps alone can't be trusted when data predates
+  // sync (updatedAt 0 on several devices would look "identical").
+  if (sameData(remote, state)) {
+    if (!remote.updatedAt) {
+      await pushRemote(); // give the shared version a real stamp
+    } else {
+      state.updatedAt = remote.updatedAt;
+      writeLocal();
+      syncCfg.syncedAt = remote.updatedAt;
+    }
+    return finishSync();
+  }
+
+  const base = syncCfg.syncedAt || 0;
+  // base 0 = this device never agreed on a version with the cloud.
+  const localChanged = base === 0 ? !isEmptyState(state) : state.updatedAt !== base;
+  const remoteChanged = base === 0 ? true : remote.updatedAt !== base;
+
+  if (localChanged && remoteChanged) {
     const keepLocal = confirm(
       "Your pile was changed on this device AND on another device since the last sync.\n\n" +
       "OK = keep THIS device's version (the cloud's version stays in the gist's revision history)\n" +
       "Cancel = use the CLOUD version (this device's version will be downloaded as a backup file first)"
     );
     if (keepLocal) await pushRemote();
-    else { exportData(); adoptRemote(remote); }
+    else {
+      exportData();
+      adoptRemote(remote);
+      if (!state.updatedAt) await pushRemote();
+    }
   } else if (localChanged) {
     await pushRemote();
   } else if (remoteChanged) {
     adoptRemote(remote);
+    if (!state.updatedAt) await pushRemote(); // cloud copy predates sync: stamp it
   }
   finishSync();
 }
