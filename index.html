@@ -43,6 +43,9 @@
   button.danger { color: var(--danger); border-color: transparent; background: transparent; }
   button.danger:hover { border-color: var(--danger); }
   button.small { padding: 3px 8px; font-size: 12px; }
+  #btn-sync.sync-ok { color: var(--ok); }
+  #btn-sync.sync-warn { color: #e0a33c; }
+  #btn-sync.sync-err { color: var(--danger); }
   input, select, textarea {
     font: inherit;
     color: var(--text);
@@ -211,6 +214,7 @@
   <div class="topbar-actions">
     <button id="btn-schemes">🎨 Paint Schemes</button>
     <button id="btn-print">🖨 Download list</button>
+    <button id="btn-sync" title="Cloud sync">☁ Sync</button>
     <button id="btn-export">⬇ Export</button>
     <button id="btn-import">⬆ Import</button>
     <button id="btn-reset" class="danger">Reset</button>
@@ -259,7 +263,7 @@ let state = load() || seed();
 let selectedArmyId = state.armies[0]?.id || null;
 
 function seed() {
-  return { version: 1, schemes: [], armies: [] };
+  return { version: 1, updatedAt: 0, schemes: [], armies: [] };
 }
 function load() {
   try {
@@ -272,17 +276,24 @@ function load() {
     return null;
   }
 }
-function save() {
+// Write the current state to this browser only (no timestamp bump, no sync).
+function writeLocal() {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   } catch (e) {
     alert("Could not save data: " + e.message);
   }
 }
+// Record a user change: stamp it, store it locally and queue a cloud sync.
+function save() {
+  state.updatedAt = Date.now();
+  writeLocal();
+  scheduleSync();
+}
 // Validate / coerce an imported or loaded object into a safe shape.
 function normalize(data) {
   if (!data || typeof data !== "object") throw new Error("not an object");
-  const out = { version: 1, schemes: [], armies: [] };
+  const out = { version: 1, updatedAt: Number.isFinite(+data.updatedAt) ? +data.updatedAt : 0, schemes: [], armies: [] };
   if (Array.isArray(data.schemes)) {
     const normHex = h => /^#[0-9a-fA-F]{6}$/.test(h) ? h : "#888888";
     const normPaint = p => {
@@ -916,20 +927,315 @@ function printModelList(unfinishedOnly) {
   window.print();
 }
 
+// ---------- Cloud sync (GitHub Gist) ----------
+// Each user pastes their own GitHub token (classic, "gist" scope only). The app keeps
+// the data in a secret gist in that user's account. Versions are identified by
+// state.updatedAt; syncCfg.syncedAt is the version this device last agreed on with
+// the cloud, so "changed" means "differs from syncedAt" (immune to clock skew).
+const SYNC_KEY = "pileOfShameSync";
+const GIST_FILE = "pile-of-shame.json";
+const GIST_DESC = "Pile of Shame Tracker data (managed by the app)";
+const SYNC_DELAY = 2000;
+
+let syncCfg = loadSyncCfg();      // { token, gistId, syncedAt, lastSyncTime }
+let syncStatus = syncCfg.token ? "pending" : "off"; // off | pending | syncing | synced | offline | error
+let syncError = "";
+let syncTimer = null;
+let syncRunning = null;
+let syncAgain = false;
+let lastScopes = null;
+
+function loadSyncCfg() {
+  try { return JSON.parse(localStorage.getItem(SYNC_KEY)) || {}; } catch { return {}; }
+}
+function saveSyncCfg() {
+  try {
+    if (syncCfg.token) localStorage.setItem(SYNC_KEY, JSON.stringify(syncCfg));
+    else localStorage.removeItem(SYNC_KEY);
+  } catch (e) { console.warn("Could not store sync settings:", e); }
+}
+
+async function gh(path, opts = {}) {
+  let res;
+  try {
+    res = await fetch("https://api.github.com" + path, {
+      ...opts,
+      cache: "no-store",
+      headers: {
+        Accept: "application/vnd.github+json",
+        Authorization: `Bearer ${syncCfg.token}`,
+        ...(opts.body ? { "Content-Type": "application/json" } : {}),
+      },
+    });
+  } catch {
+    const err = new Error("Can't reach GitHub — you seem to be offline. Changes are kept on this device and synced later.");
+    err.offline = true;
+    throw err;
+  }
+  lastScopes = res.headers.get("X-OAuth-Scopes");
+  if (!res.ok) {
+    let msg = `GitHub API error ${res.status}.`;
+    if (res.status === 401) msg = "GitHub rejected the token (wrong, revoked or expired). Disconnect and connect again with a new token.";
+    else if (res.status === 403 && res.headers.get("X-RateLimit-Remaining") === "0") msg = "GitHub rate limit reached — sync will retry later.";
+    else if (res.status === 404 && opts.method === "POST") msg = "This token can't create gists. Make sure it has the 'gist' scope.";
+    const err = new Error(msg);
+    err.status = res.status;
+    throw err;
+  }
+  return res.status === 204 ? null : res.json();
+}
+
+async function checkToken() {
+  await gh("/user");
+  // Classic tokens report their scopes; fine-grained tokens don't send this header.
+  if (lastScopes !== null && !lastScopes.split(",").map(s => s.trim()).includes("gist")) {
+    throw new Error("This token is missing the 'gist' scope. Create a classic token and tick only 'gist'.");
+  }
+}
+
+// Find this user's data gist, or create it from the current local data.
+async function findOrCreateGist() {
+  for (let page = 1; page <= 10; page++) {
+    const list = await gh(`/gists?per_page=100&page=${page}`);
+    const hit = list.find(g => g.files && g.files[GIST_FILE]);
+    if (hit) return { id: hit.id, created: false };
+    if (list.length < 100) break;
+  }
+  const g = await gh("/gists", {
+    method: "POST",
+    body: JSON.stringify({ description: GIST_DESC, public: false, files: { [GIST_FILE]: { content: JSON.stringify(state, null, 2) } } }),
+  });
+  return { id: g.id, created: true };
+}
+
+async function readRemote() {
+  const g = await gh(`/gists/${syncCfg.gistId}`);
+  const f = g.files && g.files[GIST_FILE];
+  if (!f) return null;
+  let text = f.content;
+  if (f.truncated) text = await (await fetch(f.raw_url, { cache: "no-store" })).text();
+  if (!text || !text.trim()) return null;
+  try { return normalize(JSON.parse(text)); }
+  catch { throw new Error("The cloud copy in your gist is not valid Pile of Shame data. Fix or delete the gist file, then sync again."); }
+}
+
+async function pushRemote() {
+  // Snapshot first: edits made while the request is in flight get their own sync.
+  const at = state.updatedAt;
+  const content = JSON.stringify(state, null, 2);
+  await gh(`/gists/${syncCfg.gistId}`, { method: "PATCH", body: JSON.stringify({ files: { [GIST_FILE]: { content } } }) });
+  syncCfg.syncedAt = at;
+}
+
+function isEmptyState(s) { return !s.armies.length && !s.schemes.length; }
+function editingModalOpen() { return !$("#overlay").hidden && !$("#sync-modal"); }
+
+function adoptRemote(remote) {
+  if (editingModalOpen()) closeModal(); // open editors hold references into the old state
+  state = remote;
+  writeLocal();
+  syncCfg.syncedAt = remote.updatedAt;
+  if (!findArmy(selectedArmyId)) selectedArmyId = state.armies[0]?.id || null;
+  render();
+}
+
+async function runSync(retried) {
+  setSyncStatus("syncing");
+  if (!syncCfg.gistId) {
+    const { id, created } = await findOrCreateGist();
+    syncCfg.gistId = id;
+    if (created) syncCfg.syncedAt = state.updatedAt;
+    saveSyncCfg();
+    if (created) return finishSync();
+  }
+
+  let remote;
+  try {
+    remote = await readRemote();
+  } catch (e) {
+    if (e.status === 404 && !retried) { // gist was deleted — look again / recreate
+      syncCfg.gistId = null;
+      return runSync(true);
+    }
+    throw e;
+  }
+
+  const base = syncCfg.syncedAt || 0;
+  const localAt = state.updatedAt || 0;
+  // A device that never synced and has no data has nothing worth keeping.
+  const localChanged = localAt !== base && !(base === 0 && isEmptyState(state));
+  const remoteChanged = !!remote && remote.updatedAt !== base;
+
+  if (!remote) {
+    await pushRemote();
+  } else if (remote.updatedAt === localAt) {
+    syncCfg.syncedAt = localAt; // already identical
+  } else if (localChanged && remoteChanged) {
+    const keepLocal = confirm(
+      "Your pile was changed on this device AND on another device since the last sync.\n\n" +
+      "OK = keep THIS device's version (the cloud's version stays in the gist's revision history)\n" +
+      "Cancel = use the CLOUD version (this device's version will be downloaded as a backup file first)"
+    );
+    if (keepLocal) await pushRemote();
+    else { exportData(); adoptRemote(remote); }
+  } else if (localChanged) {
+    await pushRemote();
+  } else if (remoteChanged) {
+    adoptRemote(remote);
+  }
+  finishSync();
+}
+
+function finishSync() {
+  syncCfg.lastSyncTime = Date.now();
+  saveSyncCfg();
+  setSyncStatus("synced");
+}
+
+function syncNow() {
+  clearTimeout(syncTimer);
+  if (!syncCfg.token) return Promise.resolve();
+  if (syncRunning) { syncAgain = true; return syncRunning; }
+  syncRunning = runSync(false)
+    .catch(e => {
+      console.warn("Sync failed:", e);
+      saveSyncCfg();
+      setSyncStatus(e.offline ? "offline" : "error", e.message);
+    })
+    .finally(() => {
+      syncRunning = null;
+      if (syncAgain) { syncAgain = false; syncNow(); }
+    });
+  return syncRunning;
+}
+
+function scheduleSync() {
+  if (!syncCfg.token) return;
+  clearTimeout(syncTimer);
+  if (!syncRunning) setSyncStatus("pending");
+  syncTimer = setTimeout(syncNow, SYNC_DELAY);
+}
+
+function setSyncStatus(status, error = "") {
+  syncStatus = status;
+  syncError = error;
+  updateSyncUi();
+}
+
+function syncStatusText() {
+  const last = syncCfg.lastSyncTime ? ` · last synced ${new Date(syncCfg.lastSyncTime).toLocaleString()}` : "";
+  return {
+    off: "Not connected",
+    pending: "Changes waiting to sync…",
+    syncing: "Syncing…",
+    synced: "Up to date" + last,
+    offline: "Offline — will sync when back online" + last,
+    error: "Sync error: " + syncError,
+  }[syncStatus];
+}
+
+function updateSyncUi() {
+  const btn = $("#btn-sync");
+  btn.textContent = {
+    off: "☁ Sync", pending: "☁ Pending", syncing: "☁ Syncing…",
+    synced: "☁ Synced", offline: "☁ Offline", error: "⚠ Sync error",
+  }[syncStatus];
+  btn.className = { synced: "sync-ok", offline: "sync-warn", error: "sync-err" }[syncStatus] || "";
+  btn.title = "Cloud sync: " + syncStatusText();
+  const st = $("#sync-modal-status");
+  if (st) st.textContent = syncStatusText();
+}
+
+function openSyncModal() {
+  const connected = !!syncCfg.token;
+  openModal(`<div id="sync-modal">
+    <h3>☁ Cloud sync (GitHub Gist)</h3>
+    ${connected ? `
+      <p>Status: <b id="sync-modal-status"></b></p>
+      ${syncCfg.gistId ? `<p><a href="https://gist.github.com/${esc(syncCfg.gistId)}" target="_blank" rel="noopener">Open your data gist</a> — older versions are kept in its revision history.</p>` : ""}
+      <div class="modal-actions">
+        <button class="danger" id="m-disconnect">Disconnect</button>
+        <button id="m-cancel">Close</button>
+        <button class="primary" id="m-sync">Sync now</button>
+      </div>
+    ` : `
+      <p style="color:var(--muted)">Keep your pile in a secret gist in <b>your own</b> GitHub account and use it on all your devices.</p>
+      <ol style="color:var(--muted);padding-left:18px">
+        <li><a href="https://github.com/settings/tokens/new?scopes=gist&description=Pile%20of%20Shame%20sync" target="_blank" rel="noopener">Create a classic token</a> with only the <b>gist</b> scope.</li>
+        <li>Paste it below. Use the same token on each of your devices.</li>
+      </ol>
+      <div class="field"><label>GitHub token</label><input id="f-token" type="password" autocomplete="off" spellcheck="false" placeholder="ghp_…"></div>
+      <p id="sync-modal-err" style="color:var(--danger)"></p>
+      <div class="modal-actions">
+        <button id="m-cancel">Cancel</button>
+        <button class="primary" id="m-connect">Connect</button>
+      </div>
+    `}
+    <p style="color:var(--muted);font-size:12px">The token is stored only in this browser — only connect on devices you trust.</p>
+  </div>`);
+  $("#m-cancel").onclick = closeModal;
+
+  if (connected) {
+    updateSyncUi();
+    $("#m-sync").onclick = () => syncNow();
+    $("#m-disconnect").onclick = () => {
+      if (!confirm("Stop syncing on this device?\n\nYour data stays on this device and in the gist.")) return;
+      clearTimeout(syncTimer);
+      syncCfg = {};
+      saveSyncCfg();
+      setSyncStatus("off");
+      closeModal();
+    };
+    return;
+  }
+
+  const connect = async () => {
+    const token = $("#f-token").value.trim();
+    if (!token) return;
+    const btn = $("#m-connect");
+    btn.disabled = true; btn.textContent = "Connecting…";
+    syncCfg = { token };
+    try {
+      await checkToken();
+    } catch (e) {
+      syncCfg = {};
+      $("#sync-modal-err").textContent = e.message;
+      btn.disabled = false; btn.textContent = "Connect";
+      return;
+    }
+    saveSyncCfg();
+    openSyncModal();
+    syncNow();
+  };
+  $("#m-connect").onclick = connect;
+  $("#f-token").onkeydown = e => { if (e.key === "Enter") connect(); };
+  $("#f-token").focus();
+}
+
+// Pick up changes from other devices when coming back to the app or back online.
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible" && syncCfg.token && !editingModalOpen()) syncNow();
+});
+window.addEventListener("online", () => { if (syncCfg.token) syncNow(); });
+
 // ---------- Top bar wiring ----------
 $("#btn-add-army").onclick = () => openArmyModal(null);
 $("#btn-schemes").onclick = openSchemeManager;
 $("#btn-print").onclick = openPrintModal;
+$("#btn-sync").onclick = openSyncModal;
 $("#btn-export").onclick = exportData;
 $("#btn-import").onclick = () => $("#import-file").click();
 $("#import-file").onchange = e => { if (e.target.files[0]) importData(e.target.files[0]); e.target.value = ""; };
 $("#btn-reset").onclick = () => {
-  if (!confirm("Reset ALL data? This clears every army, unit and scheme. Export a backup first if unsure.")) return;
+  const cloud = syncCfg.token ? "\n\nCloud sync is on, so the cloud copy will be cleared too (older versions stay in the gist's revision history)." : "";
+  if (!confirm("Reset ALL data? This clears every army, unit and scheme. Export a backup first if unsure." + cloud)) return;
   state = seed(); selectedArmyId = null; save(); render();
 };
 
 // ---------- Go ----------
 render();
+updateSyncUi();
+if (syncCfg.token) syncNow();
 </script>
 </body>
 </html>
