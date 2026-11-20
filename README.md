@@ -15,6 +15,17 @@ Just open `index.html` in any browser (double-click it). No install, no server, 
   paint mixes (e.g. 2 parts A + 1 part B, with an approximate blended swatch),
   attach a default scheme to an army, and optionally override it per unit.
 
+## Install on your phone
+
+The app is hosted at <https://zychonatic.github.io/pile-of-shame-tracker/> and can be installed
+like a native app (own icon, full-screen, works offline):
+
+- **Android (Chrome):** open the link → menu ⋮ → **Install app** / **Add to Home screen**.
+- **iPhone (Safari):** open the link → Share → **Add to Home Screen**.
+
+Installing needs the hosted (https) version; opening `index.html` as a local file still works,
+just without install/offline support.
+
 ## Saving your data
 
 - Your data **auto-saves in the browser** (localStorage) on every change, so it's still there
